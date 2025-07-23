@@ -69,8 +69,8 @@ config = CrawlerRunConfig(
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="sk-Z2WHmAXDKW8f31iss5iPrA",
-    base_url="https://api.quantmind.com.br/v1"
+    api_key="PLACEHOLDER_API_KEY_REMOVED",
+    base_url="https://api.openai.com/v1"
 )
 
 # Usage with proper error handling
@@ -192,7 +192,7 @@ from pydantic import BaseSettings
 
 class AppConfig(BaseSettings):
     api_key: str
-    base_url: str = "https://api.quantmind.com.br/v1"
+    base_url: str = "https://api.openai.com/v1"
     model: str = "gemini-2.5-flash"
     
     class Config:
@@ -451,8 +451,8 @@ crawl4ai-llm-docs --config
 ## Test Configuration
 
 ### Test API Credentials
-- **Base URL**: `https://api.quantmind.com.br/v1`
-- **API Key**: `sk-Z2WHmAXDKW8f31iss5iPrA`
+- **Base URL**: `https://api.openai.com/v1`
+- **API Key**: `PLACEHOLDER_API_KEY_REMOVED`
 - **Model**: `gemini-2.5-flash`
 
 ### Test Data

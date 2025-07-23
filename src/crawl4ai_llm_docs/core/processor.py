@@ -1,4 +1,4 @@
-"""Documentation processor using OpenAI-compatible APIs."""
+"""Documentation processor using OpenAI-compatible APIs with optimized parallel architecture."""
 import asyncio
 import logging
 import time
@@ -14,10 +14,15 @@ except ImportError:
     RateLimitError = None
     APIConnectionError = None
 
+from rich.console import Console
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from .scraper import ScrapedDocument
-from .parallel_processor import ParallelLLMProcessor, ProcessingItem, ProcessingResult
+from .pipeline_coordinator import PipelineCoordinator
+from .content_preservation_processor import ContentPreservationProcessor
+from .intelligent_chunker import IntelligentChunker
+from .adaptive_rate_limiter import AdaptiveRateLimiter
+from .progress_tracker import ProgressTracker
 from ..config.models import AppConfig
 from ..exceptions import ProcessingError, APIError as CustomAPIError
 
@@ -26,31 +31,35 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentationProcessor:
-    """Processes scraped documentation using LLM APIs."""
+    """Advanced documentation processor with optimized parallel architecture."""
     
-    def __init__(self, config: AppConfig, enable_parallel: bool = None):
-        """Initialize processor with configuration.
+    def __init__(self, config: AppConfig, console: Optional[Console] = None, enable_parallel: bool = None):
+        """Initialize processor with optimized parallel architecture.
         
         Args:
             config: Application configuration
+            console: Rich console for output (creates new if None)
             enable_parallel: Enable parallel processing (auto-detect if None)
         """
         self.config = config
+        self.console = console or Console()
         self.client = self._create_client()
         self._validate_dependencies()
         
         # Determine if parallel processing should be enabled
         self.enable_parallel = self._should_enable_parallel(enable_parallel)
         
-        # Initialize parallel processor if enabled
-        self._parallel_processor: Optional[ParallelLLMProcessor] = None
+        # Initialize optimized parallel architecture components
+        self.rate_limiter = AdaptiveRateLimiter(config.parallel_processing)
+        self.chunker = IntelligentChunker(config)
+        self.content_processor = ContentPreservationProcessor(config, self.rate_limiter)
+        self.pipeline_coordinator: Optional[PipelineCoordinator] = None
+        
         if self.enable_parallel:
-            self._parallel_processor = ParallelLLMProcessor(
-                self.config.parallel_processing,
-                self._parallel_process_chunk
-            )
+            self.pipeline_coordinator = PipelineCoordinator(config, self.console)
             
-        logger.info(f"DocumentationProcessor initialized - parallel_processing={self.enable_parallel}")
+        logger.info(f"DocumentationProcessor initialized with optimized architecture - "
+                   f"parallel_processing={self.enable_parallel}")
     
     def _validate_dependencies(self) -> None:
         """Validate that OpenAI dependencies are available."""
@@ -71,10 +80,10 @@ class DocumentationProcessor:
         if enable_parallel is not None:
             return enable_parallel
         
-        # Auto-detect based on configuration
+        # Auto-detect based on configuration and document count
         parallel_config = self.config.parallel_processing
         
-        # Enable if max_concurrent_requests > 1 and adaptive rate limiting is enabled
+        # Enable if adaptive rate limiting is enabled and we have concurrent capacity
         return (parallel_config.max_concurrent_requests > 1 and 
                 parallel_config.enable_adaptive_rate_limiting)
     
@@ -126,217 +135,17 @@ class DocumentationProcessor:
             # Fallback: approximate tokens as chars/4
             return len(text) // 4
     
-    def _create_consolidation_prompt(self, documents: List[ScrapedDocument]) -> str:
-        """Create prompt for documentation consolidation.
-        
-        Args:
-            documents: List of scraped documents
-            
-        Returns:
-            Consolidation prompt
-        """
-        # Check if these are already processed chunks vs raw documents
-        is_processed_chunks = all(doc.url.startswith("processed_chunk_") for doc in documents)
-        
-        if is_processed_chunks:
-            prompt = """You are a documentation expert. Consolidate the following pre-processed documentation chunks into a single, comprehensive, well-structured markdown document.
-
-These chunks have already been individually processed and cleaned. Your task is to:
-
-1. Merge all chunks into a cohesive, comprehensive document
-2. Remove any redundancy between chunks while preserving all important information
-3. Create a logical flow and clear structure across all sections
-4. Use proper markdown formatting with hierarchical headings (H1, H2, H3, etc.)
-5. Ensure smooth transitions between sections
-6. Maintain technical accuracy and preserve all details
-7. Create a comprehensive table of contents if appropriate
-8. Ensure the final document reads as a unified whole, not separate chunks
-
-The final document should be complete, well-organized, and suitable for both human reading and AI consumption.
-
-Pre-processed documentation chunks to consolidate:
-
-"""
-        else:
-            prompt = """You are a documentation expert. Consolidate the following documentation sections into a single, coherent, well-structured markdown document optimized for LLM consumption.
-
-Requirements:
-1. Remove redundancy and duplicate information
-2. Maintain technical accuracy and all important details
-3. Create logical flow and clear structure
-4. Use proper markdown formatting with clear headings
-5. Preserve code examples and their syntax highlighting
-6. Keep important links and references
-7. Organize content hierarchically with H1, H2, H3 headings
-8. Ensure the final document is comprehensive yet concise
-
-Guidelines:
-- Start with a clear title and overview
-- Group related topics together
-- Use consistent terminology throughout
-- Preserve all technical specifications and parameters
-- Include practical examples where available
-- Remove navigation elements and boilerplate text
-
-The consolidated document should be optimized for reading by other AI systems while remaining human-readable.
-
-Documentation sections to consolidate:
-
-"""
-        
-        # Add documents with source information
-        for i, doc in enumerate(documents, 1):
-            if doc.success and doc.markdown:
-                if is_processed_chunks:
-                    prompt += f"\n---\n## Chunk {i}\nContent:\n{doc.markdown}\n"
-                else:
-                    prompt += f"\n---\n## Source {i}: {doc.title}\nURL: {doc.url}\nContent:\n{doc.markdown}\n"
-        
-        prompt += "\n---\n\nConsolidated Documentation:"
-        
-        return prompt
     
-    def _chunk_documents(self, documents: List[ScrapedDocument]) -> List[List[ScrapedDocument]]:
-        """Chunk documents with one document per chunk strategy.
-        
-        Args:
-            documents: List of scraped documents
-            
-        Returns:
-            List of document chunks (each chunk contains exactly one document)
-        """
-        # Strategy: Each page/document becomes its own chunk
-        chunks = []
-        
-        # Filter successful documents
-        valid_docs = [doc for doc in documents if doc.success and doc.markdown]
-        
-        # Create one chunk per document
-        for doc in valid_docs:
-            doc_tokens = self.count_tokens(doc.markdown)
-            chunks.append([doc])
-            logger.debug(f"Created chunk for {doc.url} ({doc_tokens} tokens)")
-        
-        logger.info(f"Created {len(chunks)} chunks (1 document per chunk) from {len(documents)} total documents")
-        return chunks
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_random_exponential(multiplier=1, min=4, max=60),
-        reraise=True
-    )
-    def _process_chunk(self, documents: List[ScrapedDocument]) -> str:
-        """Process a chunk of documents with retry logic.
-        
-        Args:
-            documents: List of documents to process
-            
-        Returns:
-            Consolidated content
-            
-        Raises:
-            CustomAPIError: If API call fails
-        """
-        try:
-            prompt = self._create_consolidation_prompt(documents)
-            
-            # Count tokens for logging
-            input_tokens = self.count_tokens(prompt)
-            logger.debug(f"Processing chunk with {input_tokens} input tokens")
-            
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert technical documentation writer. Your task is to consolidate multiple documentation sources into a single, well-structured, and comprehensive document."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-            )
-            
-            content = response.choices[0].message.content
-            
-            if response.usage:
-                logger.info(
-                    f"API usage - Input: {response.usage.prompt_tokens}, "
-                    f"Output: {response.usage.completion_tokens}, "
-                    f"Total: {response.usage.total_tokens}"
-                )
-            
-            return content
-            
-        except RateLimitError as e:
-            logger.warning(f"Rate limit exceeded: {e}")
-            raise CustomAPIError(f"Rate limit exceeded: {e}")
-        except APIConnectionError as e:
-            logger.error(f"API connection error: {e}")
-            raise CustomAPIError(f"API connection error: {e}")
-        except APIError as e:
-            logger.error(f"API error: {e}")
-            raise CustomAPIError(f"API error: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error during processing: {e}")
-            raise ProcessingError(f"Processing failed: {e}")
-    
-    async def _parallel_process_chunk(self, session, item: ProcessingItem) -> ProcessingResult:
-        """Process a single chunk in parallel mode.
-        
-        Args:
-            session: HTTP session (not used for OpenAI client)
-            item: Processing item with document data
-            
-        Returns:
-            Processing result
-        """
-        start_time = time.time()
-        
-        try:
-            # Extract documents from processing item
-            documents_data = item.data.get('documents', [])
-            documents = [ScrapedDocument(**doc) for doc in documents_data]
-            
-            # Process the chunk using existing logic
-            content = self._process_chunk(documents)
-            
-            # Calculate tokens used
-            tokens_used = self.count_tokens(content)
-            response_time = time.time() - start_time
-            
-            return ProcessingResult(
-                item_id=item.id,
-                success=True,
-                data={'content': content},
-                tokens_used=tokens_used,
-                response_time=response_time
-            )
-            
-        except Exception as e:
-            response_time = time.time() - start_time
-            error_msg = str(e)
-            
-            logger.error(f"Parallel chunk processing failed for item {item.id}: {error_msg}")
-            
-            return ProcessingResult(
-                item_id=item.id,
-                success=False,
-                error=error_msg,
-                response_time=response_time
-            )
     
     def consolidate_documentation(self, documents: List[ScrapedDocument]) -> str:
-        """Consolidate scraped documentation into a single markdown document.
+        """Consolidate scraped documentation using optimized parallel architecture.
         
         Args:
             documents: List of scraped documents
             
         Returns:
-            Consolidated markdown content
+            Consolidated markdown content with preserved technical information
             
         Raises:
             ProcessingError: If processing fails
@@ -350,41 +159,76 @@ Documentation sections to consolidate:
         if not successful_docs:
             raise ProcessingError("No valid documents found for consolidation")
         
-        logger.info(f"Starting consolidation of {len(successful_docs)} documents (parallel={self.enable_parallel})")
+        logger.info(f"Starting optimized consolidation of {len(successful_docs)} documents "
+                   f"(parallel={self.enable_parallel})")
         
         try:
+            # Get initial content statistics
             total_content = "\n".join(doc.markdown for doc in successful_docs)
             total_tokens = self.count_tokens(total_content)
             
             logger.info(f"Total content: {total_tokens} tokens from {len(successful_docs)} documents")
             
             if len(successful_docs) == 1:
-                # Single document - process directly (no parallel benefit)
-                logger.info("Processing single document")
-                consolidated_content = self._process_chunk(successful_docs)
+                # Single document - use content preservation processor directly
+                logger.info("Processing single document with content preservation")
+                consolidated_content = asyncio.run(self._process_single_document(successful_docs[0]))
+                
             elif self.enable_parallel and len(successful_docs) > 1:
-                # Use parallel processing for multiple documents
-                consolidated_content = asyncio.run(self._parallel_consolidate(successful_docs))
+                # Use optimized parallel pipeline
+                consolidated_content = asyncio.run(self._parallel_consolidate_optimized(successful_docs))
+                
             else:
-                # Fall back to sequential processing
-                consolidated_content = self._sequential_consolidate(successful_docs)
+                # Use sequential processing with intelligent chunking
+                consolidated_content = asyncio.run(self._sequential_consolidate_optimized(successful_docs))
             
-            # Basic validation of output
+            # Validate output quality
             if not consolidated_content or len(consolidated_content.strip()) < 100:
                 raise ProcessingError("Generated content is too short or empty")
             
-            logger.info(f"Consolidation complete. Generated {len(consolidated_content)} characters")
+            # Check content preservation ratio
+            output_tokens = self.count_tokens(consolidated_content)
+            preservation_ratio = output_tokens / max(1, total_tokens)
+            
+            logger.info(f"Consolidation complete. Generated {len(consolidated_content)} characters "
+                       f"({output_tokens} tokens), preservation ratio: {preservation_ratio:.2%}")
+            
+            # Warn if preservation ratio is too low
+            if preservation_ratio < 0.7:
+                logger.warning(f"Low content preservation ratio: {preservation_ratio:.2%}. "
+                              "Consider reviewing content preservation settings.")
+            
             return consolidated_content
             
         except (CustomAPIError, ProcessingError):
             raise
         except Exception as e:
-            error_msg = f"Consolidation failed: {str(e)}"
+            error_msg = f"Optimized consolidation failed: {str(e)}"
             logger.error(error_msg)
             raise ProcessingError(error_msg)
     
-    def _sequential_consolidate(self, documents: List[ScrapedDocument]) -> str:
-        """Sequential consolidation (original logic).
+    async def _process_single_document(self, document: ScrapedDocument) -> str:
+        """Process a single document with content preservation.
+        
+        Args:
+            document: Single document to process
+            
+        Returns:
+            Processed content
+        """
+        # Create chunk for single document
+        chunk = self.chunker.create_chunks([document])
+        
+        if not chunk:
+            logger.warning("No chunks created from single document")
+            return document.markdown
+        
+        # Process with content preservation
+        result = await self.content_processor.process_chunks_async(chunk)
+        return result.cleaned_content
+    
+    async def _parallel_consolidate_optimized(self, documents: List[ScrapedDocument]) -> str:
+        """Optimized parallel consolidation using the new pipeline architecture.
         
         Args:
             documents: List of documents to process
@@ -392,32 +236,53 @@ Documentation sections to consolidate:
         Returns:
             Consolidated content
         """
-        logger.info(f"Using sequential processing for {len(documents)} documents")
+        logger.info(f"Using optimized parallel pipeline for {len(documents)} documents")
         
-        chunks = self._chunk_documents(documents)
-        chunk_results = []
+        if not self.pipeline_coordinator:
+            raise ProcessingError("Pipeline coordinator not initialized")
         
-        for i, chunk in enumerate(chunks, 1):
-            doc = chunk[0]  # Each chunk has exactly one document
-            logger.info(f"Processing chunk {i}/{len(chunks)}: {doc.title} ({doc.url})")
-            chunk_result = self._process_chunk(chunk)
-            chunk_results.append(chunk_result)
-            
-            # Add delay between chunks to avoid rate limiting
-            if i < len(chunks):
-                time.sleep(1)
+        # Create URL list for pipeline processing
+        urls = [doc.url for doc in documents]
         
-        # Simple concatenation of processed chunks (no further LLM consolidation) 
-        logger.info(f"Concatenating {len(chunk_results)} processed chunks without compression")
+        # Define processor function for chunks
+        def process_chunks(chunks):
+            """Process document chunks and return consolidated content."""
+            try:
+                # Run content preservation processing
+                result = asyncio.run(self.content_processor.process_chunks_async(chunks))
+                return result.cleaned_content
+            except Exception as e:
+                logger.error(f"Chunk processing failed: {e}")
+                # Fall back to concatenating original content
+                return "\n\n---\n\n".join(
+                    doc.markdown for chunk in chunks for doc in chunk.documents
+                )
         
-        # Join all processed chunks with clear separators
-        final_content = "\n\n---\n\n".join(chunk_results)
+        # Use pipeline coordinator for parallel processing with scraping and processing
+        pipeline_result = await self.pipeline_coordinator.process_urls(
+            urls, 
+            process_chunks,
+            max_retries=2
+        )
         
-        logger.info(f"Generated final document with {len(final_content)} characters")
+        if not pipeline_result.get("results"):
+            raise ProcessingError("Pipeline processing produced no results")
+        
+        # Combine all processing results
+        final_content = "\n\n---\n\n".join(
+            str(result) for result in pipeline_result["results"] if result
+        )
+        
+        # Log pipeline metrics
+        metrics = pipeline_result.get("metrics", {})
+        logger.info(f"Pipeline metrics: efficiency_ratio={metrics.get('efficiency_ratio', 0):.2f}, "
+                   f"scraping_time={metrics.get('scraping_time', 0):.2f}s, "
+                   f"processing_time={metrics.get('processing_time', 0):.2f}s")
+        
         return final_content
     
-    async def _parallel_consolidate(self, documents: List[ScrapedDocument]) -> str:
-        """Parallel consolidation using ParallelLLMProcessor.
+    async def _sequential_consolidate_optimized(self, documents: List[ScrapedDocument]) -> str:
+        """Optimized sequential processing using intelligent chunking.
         
         Args:
             documents: List of documents to process
@@ -425,69 +290,35 @@ Documentation sections to consolidate:
         Returns:
             Consolidated content
         """
-        logger.info(f"Using parallel processing for {len(documents)} documents")
+        logger.info(f"Using optimized sequential processing for {len(documents)} documents")
         
-        if not self._parallel_processor:
-            raise ProcessingError("Parallel processor not initialized")
+        # Create intelligent chunks
+        chunks = self.chunker.create_chunks(documents)
         
-        # Create processing items for each document chunk
-        chunks = self._chunk_documents(documents)
-        processing_items = []
+        if not chunks:
+            logger.warning("No chunks created from documents")
+            return "\n\n---\n\n".join(doc.markdown for doc in documents)
         
-        for i, chunk in enumerate(chunks):
-            doc = chunk[0]  # Each chunk has exactly one document
-            estimated_tokens = self.count_tokens(doc.markdown)
-            
-            # Serialize document data for parallel processing
-            item = ProcessingItem(
-                id=f"chunk_{i}",
-                data={
-                    'documents': [{
-                        'url': doc.url,
-                        'title': doc.title,
-                        'content': doc.content,
-                        'markdown': doc.markdown,
-                        'success': doc.success,
-                        'error': doc.error,
-                        'scraped_at': doc.scraped_at,
-                        'word_count': doc.word_count
-                    }]
-                },
-                estimated_tokens=estimated_tokens
-            )
-            processing_items.append(item)
+        # Log chunking statistics
+        chunking_stats = self.chunker.get_chunking_stats(chunks)
+        logger.info(f"Chunking stats: {chunking_stats['total_chunks']} chunks, "
+                   f"efficiency_gain: {chunking_stats['efficiency_gain']:.2f}x, "
+                   f"token_utilization: {chunking_stats['token_utilization']:.2%}")
         
-        # Process chunks in parallel
-        results = await self._parallel_processor.process_items(processing_items)
+        # Process chunks with content preservation
+        result = await self.content_processor.process_chunks_async(chunks)
         
-        # Extract successful chunk results
-        chunk_results = []
-        for result in results:
-            if result.success and result.data:
-                chunk_results.append(result.data['content'])
-            else:
-                logger.warning(f"Chunk {result.item_id} failed: {result.error}")
-        
-        if not chunk_results:
-            raise ProcessingError("No chunks were successfully processed")
-        
-        # Simple concatenation of processed chunks (no further LLM consolidation)
-        logger.info(f"Concatenating {len(chunk_results)} processed chunks without compression")
-        
-        # Join all processed chunks with clear separators
-        final_content = "\n\n---\n\n".join(chunk_results)
-        
-        logger.info(f"Generated final document with {len(final_content)} characters")
-        return final_content
+        return result.cleaned_content
+
     
     def get_processing_stats(self, documents: List[ScrapedDocument]) -> Dict[str, Any]:
-        """Get statistics about processing input.
+        """Get comprehensive statistics about processing input and architecture.
         
         Args:
             documents: List of documents
             
         Returns:
-            Dictionary with statistics
+            Dictionary with comprehensive statistics
         """
         successful_docs = [doc for doc in documents if doc.success and doc.markdown]
         
@@ -495,64 +326,225 @@ Documentation sections to consolidate:
         total_tokens = self.count_tokens(total_content)
         total_chars = len(total_content)
         
+        # Get intelligent chunking preview
+        chunking_preview = {}
+        if successful_docs:
+            chunks = self.chunker.create_chunks(successful_docs)
+            chunking_preview = self.chunker.get_chunking_stats(chunks)
+        
+        # Get rate limiter status
+        rate_limiter_status = self.rate_limiter.get_rate_limit_status()
+        
+        # Get content processor statistics
+        processor_stats = self.content_processor.get_processing_statistics()
+        
         stats = {
-            "total_documents": len(documents),
-            "processable_documents": len(successful_docs),
-            "total_characters": total_chars,
-            "estimated_tokens": total_tokens,
-            "chunks_needed": max(1, (total_tokens + self.config.max_tokens - 1000 - 1) // (self.config.max_tokens - 1000)),
-            "model": self.config.model,
-            "max_tokens_per_request": self.config.max_tokens,
-            "parallel_processing_enabled": self.enable_parallel,
-            "max_concurrent_requests": self.config.parallel_processing.max_concurrent_requests if self.enable_parallel else 1
+            "input_analysis": {
+                "total_documents": len(documents),
+                "processable_documents": len(successful_docs),
+                "total_characters": total_chars,
+                "estimated_tokens": total_tokens,
+                "average_tokens_per_doc": total_tokens / len(successful_docs) if successful_docs else 0
+            },
+            "architecture_config": {
+                "model": self.config.model,
+                "max_tokens_per_request": self.config.max_tokens,
+                "parallel_processing_enabled": self.enable_parallel,
+                "max_concurrent_requests": self.config.parallel_processing.max_concurrent_requests,
+                "adaptive_rate_limiting": self.config.parallel_processing.enable_adaptive_rate_limiting,
+                "chunk_target_tokens": self.config.chunk_target_tokens,
+                "chunk_max_tokens": self.config.chunk_max_tokens
+            },
+            "intelligent_chunking": chunking_preview,
+            "rate_limiter_status": rate_limiter_status,
+            "content_processor_stats": processor_stats,
+            "estimated_performance": {
+                "expected_chunks": chunking_preview.get("total_chunks", 1),
+                "efficiency_gain": chunking_preview.get("efficiency_gain", 1.0),
+                "estimated_cost_reduction": chunking_preview.get("estimated_cost_reduction", 0.0),
+                "sequential_vs_parallel_speedup": self.config.parallel_processing.max_concurrent_requests if self.enable_parallel else 1
+            }
         }
         
         return stats
     
     def get_parallel_processing_stats(self) -> Optional[Dict[str, Any]]:
-        """Get parallel processing statistics if available.
+        """Get comprehensive parallel architecture statistics.
         
         Returns:
-            Dictionary with parallel processing statistics or None
+            Dictionary with parallel architecture statistics or None
         """
-        if not self._parallel_processor:
+        if not self.enable_parallel:
             return None
         
-        return self._parallel_processor.get_processing_statistics()
+        stats = {}
+        
+        # Pipeline coordinator statistics
+        if self.pipeline_coordinator:
+            stats["pipeline_coordinator"] = asyncio.run(
+                self.pipeline_coordinator.health_check()
+            )
+        
+        # Rate limiter statistics
+        stats["rate_limiter"] = self.rate_limiter.get_rate_limit_status()
+        
+        # Content processor statistics
+        stats["content_processor"] = self.content_processor.get_processing_statistics()
+        
+        # Architecture configuration
+        stats["architecture_config"] = {
+            "max_concurrent_requests": self.config.parallel_processing.max_concurrent_requests,
+            "adaptive_rate_limiting": self.config.parallel_processing.enable_adaptive_rate_limiting,
+            "session_pooling": self.config.parallel_processing.enable_session_pooling,
+            "circuit_breaker": self.config.parallel_processing.enable_circuit_breaker,
+            "chunk_target_tokens": self.config.chunk_target_tokens,
+            "chunk_max_tokens": self.config.chunk_max_tokens
+        }
+        
+        return stats
     
-    async def test_parallel_processing(self, num_test_items: int = 5) -> Dict[str, Any]:
-        """Test parallel processing functionality.
+    async def test_parallel_processing(self, num_test_urls: int = 5) -> Dict[str, Any]:
+        """Test the optimized parallel processing architecture.
         
         Args:
-            num_test_items: Number of test items to process
+            num_test_urls: Number of test URLs to process
             
         Returns:
-            Test results and statistics
+            Test results and comprehensive statistics
         """
-        if not self.enable_parallel or not self._parallel_processor:
+        if not self.enable_parallel:
             return {
                 'status': 'skipped',
                 'reason': 'Parallel processing not enabled'
             }
         
-        logger.info(f"Testing parallel processing with {num_test_items} items")
+        logger.info(f"Testing optimized parallel architecture with {num_test_urls} URLs")
         
         try:
-            results = await self._parallel_processor.test_parallel_processing(num_test_items)
-            stats = self._parallel_processor.get_processing_statistics()
+            # Create test URLs (using httpbin for testing)
+            test_urls = [
+                f"https://httpbin.org/json?test={i}" 
+                for i in range(num_test_urls)
+            ]
             
-            return {
-                'status': 'completed',
-                'test_items': num_test_items,
-                'results_count': len(results),
-                'successful_results': len([r for r in results if r.success]),
-                'failed_results': len([r for r in results if not r.success]),
-                'statistics': stats
-            }
+            start_time = time.time()
             
+            # Test the complete pipeline
+            if self.pipeline_coordinator:
+                def dummy_processor(chunks):
+                    return f"Processed {len(chunks)} chunks successfully"
+                
+                result = await self.pipeline_coordinator.process_urls(
+                    test_urls,
+                    dummy_processor,
+                    max_retries=1
+                )
+                
+                processing_time = time.time() - start_time
+                
+                # Get comprehensive statistics
+                architecture_stats = self.get_parallel_processing_stats()
+                
+                return {
+                    'status': 'completed',
+                    'test_urls': num_test_urls,
+                    'processing_time': processing_time,
+                    'pipeline_result': result,
+                    'architecture_statistics': architecture_stats,
+                    'performance_metrics': {
+                        'urls_per_second': num_test_urls / processing_time if processing_time > 0 else 0,
+                        'efficiency_ratio': result.get('metrics', {}).get('efficiency_ratio', 0),
+                        'concurrent_peak': result.get('metrics', {}).get('concurrent_peak', 0)
+                    }
+                }
+            else:
+                # Test individual components
+                test_results = {}
+                
+                # Test rate limiter
+                for i in range(3):
+                    await self.rate_limiter.acquire()
+                    await asyncio.sleep(0.1)
+                test_results['rate_limiter'] = 'working'
+                
+                # Test content processor
+                test_content = "# Test Document\n\nThis is a test of the content preservation processor."
+                from .scraper import ScrapedDocument
+                test_doc = ScrapedDocument(
+                    url="https://test.example.com",
+                    title="Test Document",
+                    markdown=test_content,
+                    success=True
+                )
+                
+                content_test = await self.content_processor.test_content_preservation(test_content)
+                test_results['content_processor'] = content_test
+                
+                return {
+                    'status': 'completed',
+                    'component_tests': test_results,
+                    'processing_time': time.time() - start_time,
+                    'architecture_statistics': self.get_parallel_processing_stats()
+                }
+                
         except Exception as e:
-            logger.error(f"Parallel processing test failed: {e}")
+            logger.error(f"Parallel architecture test failed: {e}")
             return {
                 'status': 'failed',
-                'error': str(e)
+                'error': str(e),
+                'architecture_statistics': self.get_parallel_processing_stats()
             }
+    
+    def get_architecture_health(self) -> Dict[str, Any]:
+        """Get health status of all architecture components.
+        
+        Returns:
+            Dictionary with health status of each component
+        """
+        health = {
+            "timestamp": time.time(),
+            "overall_status": "healthy",
+            "components": {}
+        }
+        
+        try:
+            # Rate limiter health
+            rate_status = self.rate_limiter.get_rate_limit_status()
+            health["components"]["rate_limiter"] = {
+                "status": "healthy" if not rate_status["circuit_breaker_open"] else "degraded",
+                "current_delay": rate_status["current_delay"],
+                "error_count": rate_status["error_count"]
+            }
+            
+            # Content processor health
+            processor_stats = self.content_processor.get_processing_statistics()
+            health["components"]["content_processor"] = {
+                "status": "healthy",
+                "chunks_processed": processor_stats["total_chunks_processed"],
+                "average_preservation": processor_stats["average_preservation_ratio"]
+            }
+            
+            # Pipeline coordinator health (if enabled)
+            if self.pipeline_coordinator:
+                pipeline_health = asyncio.run(self.pipeline_coordinator.health_check())
+                health["components"]["pipeline_coordinator"] = {
+                    "status": "healthy" if pipeline_health["pipeline_active"] else "inactive",
+                    "active_tasks": pipeline_health["active_scraping_tasks"] + pipeline_health["active_processing_tasks"],
+                    "queue_size": pipeline_health["scraping_queue_size"] + pipeline_health["processing_queue_size"]
+                }
+            
+            # Check for any degraded components
+            degraded_components = [
+                name for name, component in health["components"].items() 
+                if component["status"] != "healthy"
+            ]
+            
+            if degraded_components:
+                health["overall_status"] = "degraded"
+                health["degraded_components"] = degraded_components
+                
+        except Exception as e:
+            health["overall_status"] = "error"
+            health["error"] = str(e)
+        
+        return health

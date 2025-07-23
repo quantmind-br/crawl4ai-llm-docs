@@ -141,6 +141,20 @@ class AppConfig(BaseSettings):
         description="Parallel processing configuration"
     )
     
+    # Intelligent Chunking Configuration
+    chunk_target_tokens: int = Field(
+        default=12000,
+        ge=5000,
+        le=20000,
+        description="Target tokens per chunk for optimal API usage"
+    )
+    chunk_max_tokens: int = Field(
+        default=15000,
+        ge=8000,
+        le=25000,
+        description="Maximum tokens per chunk before forced split"
+    )
+    
     class Config:
         """Pydantic configuration."""
         env_prefix = "CRAWL4AI_"
@@ -164,16 +178,30 @@ class AppConfig(BaseSettings):
     
     @classmethod
     def get_test_config(cls) -> 'AppConfig':
-        """Get configuration with test API credentials."""
+        """Get configuration with test API credentials from environment variables."""
+        import os
+        
+        api_key = os.getenv('CRAWL4AI_API_KEY', '')
+        base_url = os.getenv('CRAWL4AI_BASE_URL', 'https://api.openai.com/v1')
+        model = os.getenv('CRAWL4AI_MODEL', 'gpt-3.5-turbo')
+        
+        if not api_key:
+            raise ValueError(
+                "CRAWL4AI_API_KEY environment variable is required for test configuration. "
+                "Please set it to your API key."
+            )
+        
         return cls(
-            api_key="sk-Z2WHmAXDKW8f31iss5iPrA",
-            base_url="https://api.quantmind.com.br/v1",
-            model="gemini/gemini-2.5-flash-lite-preview-06-17",
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
             max_tokens=16000,  # Doubled to reduce API calls and improve performance
+            chunk_target_tokens=12000,  # Optimized for intelligent batching
+            chunk_max_tokens=15000,     # Allow larger chunks for efficiency
             parallel_processing=ParallelProcessingConfig(
-                max_concurrent_requests=2,  # Reduced to be more respectful to API rate limits
+                max_concurrent_requests=6,  # Optimized for performance
                 enable_adaptive_rate_limiting=True,
-                progress_update_interval=3  # Slightly longer to reduce noise
+                progress_update_interval=2  # Faster progress updates
             )
         )
 

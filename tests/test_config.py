@@ -17,8 +17,8 @@ class TestAppConfig:
         """Test default configuration values."""
         config = AppConfig().get_test_config()
         
-        assert config.api_key == "sk-Z2WHmAXDKW8f31iss5iPrA"
-        assert config.base_url == "https://api.quantmind.com.br/v1"
+        assert config.api_key == "PLACEHOLDER_API_KEY_REMOVED"
+        assert config.base_url == "https://api.openai.com/v1"
         assert config.model == "gemini-2.5-flash"
         assert config.max_workers == 4
         assert config.temperature == 0.1
@@ -127,8 +127,8 @@ class TestConfigManager:
         config = manager.load_config()
         
         # Should return test configuration
-        assert config.api_key == "sk-Z2WHmAXDKW8f31iss5iPrA"
-        assert config.base_url == "https://api.quantmind.com.br/v1"
+        assert config.api_key == "PLACEHOLDER_API_KEY_REMOVED"
+        assert config.base_url == "https://api.openai.com/v1"
     
     @patch('crawl4ai_llm_docs.config.manager.PlatformDirs')
     def test_save_config(self, mock_platform_dirs):

@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -42,10 +43,11 @@ def display_banner() -> None:
 
 
 def display_config_info(config_manager: ConfigManager) -> None:
-    """Display configuration information."""
+    """Display comprehensive configuration information."""
     info = config_manager.get_config_info()
     config = config_manager.app_config
     
+    # Main configuration table
     table = Table(title="Configuration Information")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
@@ -57,17 +59,37 @@ def display_config_info(config_manager: ConfigManager) -> None:
     table.add_row("Max Workers", str(config.max_workers))
     table.add_row("Debug Mode", str(config.debug))
     
-    # Add parallel processing configuration
-    parallel_config = config.parallel_processing
-    table.add_row("--- Parallel Processing ---", "")
-    table.add_row("Max Concurrent Requests", str(parallel_config.max_concurrent_requests))
-    table.add_row("Adaptive Rate Limiting", str(parallel_config.enable_adaptive_rate_limiting))
-    table.add_row("Session Pooling", str(parallel_config.enable_session_pooling))
-    table.add_row("Progress Update Interval", f"{parallel_config.progress_update_interval}s")
-    table.add_row("Request Timeout", f"{parallel_config.request_timeout}s")
-    table.add_row("Error Threshold", f"{parallel_config.error_threshold_percent:.1%}")
-    
     console.print(table)
+    
+    # Parallel processing configuration table
+    parallel_config = config.parallel_processing
+    parallel_table = Table(title="Optimized Parallel Architecture")
+    parallel_table.add_column("Component", style="cyan")
+    parallel_table.add_column("Setting", style="yellow")
+    parallel_table.add_column("Value", style="green")
+    
+    parallel_table.add_row("Pipeline Coordinator", "Max Concurrent Requests", str(parallel_config.max_concurrent_requests))
+    parallel_table.add_row("Rate Limiter", "Adaptive Rate Limiting", str(parallel_config.enable_adaptive_rate_limiting))
+    parallel_table.add_row("Rate Limiter", "Buffer Percentage", f"{parallel_config.rate_limit_buffer_percent:.1%}")
+    parallel_table.add_row("Rate Limiter", "Circuit Breaker", str(parallel_config.enable_circuit_breaker))
+    parallel_table.add_row("Rate Limiter", "Error Threshold", f"{parallel_config.error_threshold_percent:.1%}")
+    parallel_table.add_row("Session Manager", "Session Pooling", str(parallel_config.enable_session_pooling))
+    parallel_table.add_row("Session Manager", "Max Connections/Host", str(parallel_config.max_connections_per_host))
+    parallel_table.add_row("Session Manager", "Request Timeout", f"{parallel_config.request_timeout}s")
+    parallel_table.add_row("Progress Tracker", "Update Interval", f"{parallel_config.progress_update_interval}s")
+    
+    console.print(parallel_table)
+    
+    # Intelligent chunking configuration
+    chunking_table = Table(title="Intelligent Chunking Configuration")
+    chunking_table.add_column("Setting", style="cyan")
+    chunking_table.add_column("Value", style="green")
+    
+    chunking_table.add_row("Target Tokens per Chunk", f"{config.chunk_target_tokens:,}")
+    chunking_table.add_row("Max Tokens per Chunk", f"{config.chunk_max_tokens:,}")
+    chunking_table.add_row("Content-Based Chunking", "Enabled")
+    
+    console.print(chunking_table)
 
 
 def interactive_configuration(config_manager: ConfigManager) -> None:
@@ -146,7 +168,7 @@ def process_urls_file(
     debug: bool = False,
     test_parallel: bool = False
 ) -> None:
-    """Process URLs file and generate documentation.
+    """Process URLs file using optimized parallel architecture.
     
     Args:
         urls_file: Path to file containing URLs
@@ -176,34 +198,36 @@ def process_urls_file(
             console.print("[red]X Parallel processing configuration is invalid.[/red]")
             return
         
-        # Initialize components
+        # Initialize components with optimized architecture
         file_handler = FileHandler()
         scraper = DocumentationScraper(config_manager.crawler_config)
-        processor = DocumentationProcessor(config)
+        processor = DocumentationProcessor(config, console)  # Pass console for integrated progress
         
         # Test parallel processing if requested
         if test_parallel:
-            console.print("[cyan]Testing parallel processing functionality...[/cyan]")
+            console.print("[cyan]Testing optimized parallel architecture...[/cyan]")
             try:
                 test_result = asyncio.run(processor.test_parallel_processing(10))
                 
                 if test_result['status'] == 'completed':
-                    console.print(f"[green]+ Parallel processing test successful![/green]")
-                    console.print(f"  Test items: {test_result['test_items']}")
-                    console.print(f"  Successful: {test_result['successful_results']}")
-                    console.print(f"  Failed: {test_result['failed_results']}")
+                    console.print(f"[green]+ Parallel architecture test successful![/green]")
                     
-                    # Show detailed statistics
-                    stats = test_result.get('statistics', {})
-                    if stats:
-                        processing_stats = stats.get('processing', {})
-                        console.print(f"  Success rate: {processing_stats.get('success_rate', 0):.1%}")
-                        console.print(f"  Active tasks: {processing_stats.get('active_tasks', 0)}")
+                    # Show performance metrics
+                    if 'performance_metrics' in test_result:
+                        metrics = test_result['performance_metrics']
+                        console.print(f"  URLs per second: {metrics.get('urls_per_second', 0):.2f}")
+                        console.print(f"  Efficiency ratio: {metrics.get('efficiency_ratio', 0):.2f}x")
+                        console.print(f"  Concurrent peak: {metrics.get('concurrent_peak', 0)}")
+                    
+                    # Show architecture statistics
+                    arch_stats = test_result.get('architecture_statistics', {})
+                    if arch_stats:
+                        rate_limiter = arch_stats.get('rate_limiter', {})
+                        console.print(f"  Rate limiter delay: {rate_limiter.get('current_delay', 0):.2f}s")
+                        console.print(f"  Circuit breaker: {'Open' if rate_limiter.get('circuit_breaker_open') else 'Closed'}")
                         
-                        progress_stats = stats.get('progress', {})
-                        if progress_stats:
-                            console.print(f"  Requests/sec: {progress_stats.get('requests_per_second', 0):.2f}")
-                            console.print(f"  Avg response time: {progress_stats.get('average_response_time', 0):.2f}s")
+                        content_processor = arch_stats.get('content_processor', {})
+                        console.print(f"  Content preservation avg: {content_processor.get('average_preservation_ratio', 0):.2%}")
                 
                 elif test_result['status'] == 'skipped':
                     console.print(f"[yellow]! Parallel processing test skipped: {test_result['reason']}[/yellow]")
@@ -214,12 +238,27 @@ def process_urls_file(
             
             return
         
+        # Display architecture health check
+        console.print("Performing architecture health check...")
+        health_status = processor.get_architecture_health()
+        
+        if health_status["overall_status"] == "healthy":
+            console.print("[green]✓ All architecture components healthy[/green]")
+        elif health_status["overall_status"] == "degraded":
+            console.print(f"[yellow]⚠ Architecture degraded: {', '.join(health_status.get('degraded_components', []))}[/yellow]")
+        else:
+            console.print(f"[red]✗ Architecture error: {health_status.get('error', 'Unknown error')}[/red]")
+        
         # Display processing configuration
         parallel_config = config.parallel_processing
-        console.print(f"[dim]Processing mode: {'Parallel' if parallel_config.max_concurrent_requests > 1 else 'Sequential'}[/dim]")
-        if parallel_config.max_concurrent_requests > 1:
-            console.print(f"[dim]Max concurrent requests: {parallel_config.max_concurrent_requests}[/dim]")
+        is_parallel = parallel_config.max_concurrent_requests > 1
+        console.print(f"[dim]Processing mode: {'Optimized Parallel' if is_parallel else 'Sequential'}[/dim]")
+        
+        if is_parallel:
+            console.print(f"[dim]Pipeline coordination: {parallel_config.max_concurrent_requests} concurrent workers[/dim]")
             console.print(f"[dim]Adaptive rate limiting: {parallel_config.enable_adaptive_rate_limiting}[/dim]")
+            console.print(f"[dim]Content preservation: Enabled with validation[/dim]")
+            console.print(f"[dim]Intelligent chunking: {config.chunk_target_tokens:,} target tokens[/dim]")
         
         # Read and validate URLs
         console.print("Reading URLs...")
@@ -231,29 +270,41 @@ def process_urls_file(
         with console.status("[bold green]Scraping websites..."):
             scraped_docs = scraper.scrape_urls(urls)
         
-        console.print(f"+ Successfully scraped {len(scraped_docs)} documents")
+        successful_docs = [doc for doc in scraped_docs if doc.success]
+        console.print(f"+ Successfully scraped {len(successful_docs)}/{len(scraped_docs)} documents")
         
-        # Show processing statistics
+        if not successful_docs:
+            console.print("[red]X No documents were successfully scraped. Check URLs and network connectivity.[/red]")
+            return
+        
+        # Show comprehensive processing statistics
         try:
-            stats = processor.get_processing_stats(scraped_docs)
-            console.print(f"[dim]Estimated tokens: {stats['estimated_tokens']:,}[/dim]")
-            console.print(f"[dim]Processing mode: {'Parallel' if stats['parallel_processing_enabled'] else 'Sequential'}[/dim]")
-            if stats['parallel_processing_enabled']:
-                console.print(f"[dim]Max concurrent: {stats['max_concurrent_requests']}[/dim]")
+            stats = processor.get_processing_stats(successful_docs)
+            
+            # Display input analysis
+            input_analysis = stats.get('input_analysis', {})
+            console.print(f"[dim]Input analysis: {input_analysis.get('estimated_tokens', 0):,} tokens, "
+                         f"avg {input_analysis.get('average_tokens_per_doc', 0):.0f} tokens/doc[/dim]")
+            
+            # Display chunking preview
+            chunking_stats = stats.get('intelligent_chunking', {})
+            if chunking_stats:
+                console.print(f"[dim]Chunking strategy: {chunking_stats.get('total_chunks', 0)} chunks, "
+                             f"{chunking_stats.get('efficiency_gain', 1):.2f}x more efficient, "
+                             f"{chunking_stats.get('estimated_cost_reduction', 0):.1%} cost reduction[/dim]")
+            
         except Exception as e:
             logger.debug(f"Could not get processing stats: {e}")
+            stats = {}
         
-        # Process with LLM
-        console.print("Processing with LLM...")
+        # Process with LLM using optimized architecture
+        console.print("Processing with optimized LLM architecture...")
         
-        # Show enhanced progress for parallel processing
-        if stats and stats.get('parallel_processing_enabled'):
-            # For parallel processing, the progress will be handled by the ProgressTracker
-            consolidated_content = processor.consolidate_documentation(scraped_docs)
-        else:
-            # For sequential processing, show simple status
-            with console.status("[bold blue]Consolidating documentation..."):
-                consolidated_content = processor.consolidate_documentation(scraped_docs)
+        # The DocumentationProcessor now includes integrated progress tracking
+        # Progress will be shown automatically via the ProgressTracker component
+        start_time = time.time()
+        consolidated_content = processor.consolidate_documentation(successful_docs)
+        processing_time = time.time() - start_time
         
         # Generate output filename
         output_file = urls_file.with_suffix('.md')
@@ -262,20 +313,32 @@ def process_urls_file(
         console.print(f"Saving to: {output_file}")
         file_handler.write_markdown_file(output_file, consolidated_content)
         
+        # Display comprehensive completion statistics
         console.print(f"[green]+ Documentation processing complete![/green]")
         console.print(f"[green]Output saved to: {output_file}[/green]")
+        console.print(f"[dim]Total processing time: {processing_time:.2f}s[/dim]")
+        console.print(f"[dim]Output size: {len(consolidated_content):,} characters[/dim]")
         
-        # Show final parallel processing statistics if available
-        if stats and stats.get('parallel_processing_enabled'):
-            try:
-                parallel_stats = processor.get_parallel_processing_stats()
-                if parallel_stats:
-                    processing_stats = parallel_stats.get('processing', {})
-                    console.print(f"[dim]Final statistics: {processing_stats.get('completed', 0)} completed, "
-                                f"{processing_stats.get('failed', 0)} failed, "
-                                f"{processing_stats.get('success_rate', 0):.1%} success rate[/dim]")
-            except Exception as e:
-                logger.debug(f"Could not get final parallel stats: {e}")
+        # Show final architecture statistics
+        try:
+            parallel_stats = processor.get_parallel_processing_stats()
+            if parallel_stats:
+                # Rate limiter statistics
+                rate_stats = parallel_stats.get('rate_limiter', {})
+                console.print(f"[dim]Rate limiter: {rate_stats.get('current_delay', 0):.2f}s delay, "
+                             f"{rate_stats.get('error_count', 0)} errors[/dim]")
+                
+                # Content processor statistics
+                content_stats = parallel_stats.get('content_processor', {})
+                console.print(f"[dim]Content preservation: {content_stats.get('average_preservation_ratio', 0):.2%} avg, "
+                             f"{content_stats.get('total_chunks_processed', 0)} chunks processed[/dim]")
+                
+                # Pipeline coordinator statistics (if available)
+                pipeline_stats = parallel_stats.get('pipeline_coordinator', {})
+                if pipeline_stats:
+                    console.print(f"[dim]Pipeline efficiency: {processing_time / len(successful_docs):.2f}s per document[/dim]")
+        except Exception as e:
+            logger.debug(f"Could not get final parallel stats: {e}")
         
     except Exception as e:
         logger.error(f"Processing failed: {e}", exc_info=debug)

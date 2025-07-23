@@ -260,8 +260,65 @@ class DocumentationScraper:
         logger.info(f"Starting to scrape {len(urls)} URLs")
         
         try:
-            # Run async scraping
-            results = asyncio.run(self._scrape_urls_async(urls))
+            # Check if we're already in an async context
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context, need to handle differently
+                import nest_asyncio
+                nest_asyncio.apply()
+                results = asyncio.run(self._scrape_urls_async(urls))
+            except RuntimeError:
+                # No running loop, safe to use asyncio.run
+                results = asyncio.run(self._scrape_urls_async(urls))
+            
+            # Analyze results
+            successful = [r for r in results if r.success]
+            failed = [r for r in results if not r.success]
+            
+            logger.info(f"Scraping completed: {len(successful)} successful, {len(failed)} failed")
+            
+            # Log failed URLs for debugging
+            if failed:
+                logger.warning("Failed URLs:")
+                for doc in failed:
+                    logger.warning(f"  {doc.url}: {doc.error}")
+            
+            # Check if we have any successful results
+            if not successful:
+                raise ScrapingError(f"All {len(urls)} URLs failed to scrape")
+            
+            # Log success statistics
+            total_words = sum(doc.word_count for doc in successful)
+            logger.info(f"Successfully scraped {total_words} words from {len(successful)} documents")
+            
+            return results
+            
+        except Exception as e:
+            error_msg = f"Scraping failed: {str(e)}"
+            logger.error(error_msg)
+            raise ScrapingError(error_msg)
+
+    async def scrape_urls_async(self, urls: List[str]) -> List[ScrapedDocument]:
+        """Async version of scrape_urls for use within async contexts.
+        
+        Args:
+            urls: List of URLs to scrape
+            
+        Returns:
+            List of ScrapedDocument instances
+            
+        Raises:
+            ScrapingError: If scraping fails completely
+        """
+        if not urls:
+            logger.warning("No URLs provided for scraping")
+            return []
+        
+        logger.info(f"Starting to scrape {len(urls)} URLs")
+        
+        try:
+            # Run async scraping directly
+            results = await self._scrape_urls_async(urls)
             
             # Analyze results
             successful = [r for r in results if r.success]
