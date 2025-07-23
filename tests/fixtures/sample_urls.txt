@@ -1,0 +1,4 @@
+# Sample URLs for testing crawl4ai-llm-docs
+https://docs.python.org/3/library/json.html
+https://docs.python.org/3/library/pathlib.html
+https://docs.python.org/3/tutorial/inputoutput.html
